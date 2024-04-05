@@ -140,6 +140,9 @@ class TakePhoto:
             self.find_ball(cv_image) # add a timer, to rotate for a specified amount of time before trying to find ball
             # again, then once timer is complete search for ball again, initial attempt of trying to measure size of ball and
             # searching based on being close to current ball does not work.
+
+            #  another idea is to navigate to drop off position in next state in order to avoid the ball finding algo, then we can navigate close
+            # to the next ball position then find next ball using the algo, continuing with the state machine will work well
             self.move_to_object()
             # print('waiting for next movement')
             print('area = ' + str(self.area))
