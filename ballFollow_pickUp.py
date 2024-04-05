@@ -10,6 +10,9 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import Twist
 
+import moveit_commander
+import moveit_msgs.msg
+
 
 class TakePhoto:
     def __init__(self):
@@ -33,9 +36,44 @@ class TakePhoto:
 
         # initialize global state flags
         self.goalAcheived = 0
+        self.goal2Acheived = 0
+        self.intermediateGoal2Acheived = 0
         self.oldWidth = 0
 
         self.area = 0
+        self.trajectory1Complete = 0
+
+        # manipulator variables
+
+        self.names1 = 'position1'
+        self.values1 = [-0.002,0.326,0.202,0.088]
+        self.names2 = 'position2'
+        self.values2 = [-0.202,0.426,-0.698,0.188]
+
+        self.names3 = 'position3'
+        self.values3 = [0.098,0.976,-0.498,0.388]
+
+        self.names4 = 'position4'
+        self.values4 = [1.198,1.176,-0.648,0.488]
+
+        self.robot = moveit_commander.RobotCommander()
+        self.scene = moveit_commander.PlanningSceneInterface()
+        self.arm_group = moveit_commander.MoveGroupCommander("arm")
+        self.gripper_group = moveit_commander.MoveGroupCommander("gripper")
+        self.display_trajectory_publisher = rospy.Publisher('/move_group/display_planned_path', moveit_msgs.msg.DisplayTrajectory, queue_size=1)
+
+        #Had probelms with planner failing, Using this planner now. I believe default is OMPL
+        self.arm_group.set_planner_id("RRTConnectkConfigDefault")
+        #Increased available planning time from 5 to 10 seconds
+        self.arm_group.set_planning_time(20)
+
+        self.arm_group.remember_joint_values(self.names1, self.values1)
+        self.arm_group.remember_joint_values(self.names2, self.values2)
+        self.arm_group.remember_joint_values(self.names3, self.values3)
+        self.arm_group.remember_joint_values(self.names4, self.values4)
+
+        self.gripper_group_variable_values = self.gripper_group.get_current_joint_values()
+                        
 
         # Allow up to one second to connection
         rospy.sleep(1)
@@ -75,9 +113,60 @@ class TakePhoto:
                 self.goalAcheived = 1
                 print('goal acheived')
                 self.stop()
-        else:
+        elif(self.goalAcheived and not self.trajectory1Complete):
             print('goal sustained and not moving again')
             self.stop()
+            self.move_home()
+            self.open_gripper()
+            # self.move_position1()
+            # self.move_home()
+            # self.move_position2()
+            # self.move_position3()
+            # self.close_gripper()
+            # self.move_position2()
+            # self.move_position4()
+            # self.open_gripper()
+            # self.move_home()
+            # self.close_gripper()
+            self.trajectory1Complete = 1
+        elif(self.trajectory1Complete and not self.goal2Acheived):
+
+            if (not self.ball_is_taken):
+                if(self.area < 50000):
+
+                    self.find_ball(cv_image)
+            # else:
+                # self.find_goal(cv_image)
+            self.find_ball(cv_image) # add a timer, to rotate for a specified amount of time before trying to find ball
+            # again, then once timer is complete search for ball again, initial attempt of trying to measure size of ball and
+            # searching based on being close to current ball does not work.
+            self.move_to_object()
+            # print('waiting for next movement')
+            print('area = ' + str(self.area))
+        #     if(self.area > 50000):
+        #         self.find_ball(cv_image)    
+        #         self.rot.angular.z=0.1
+        #         self.rot.linear.x=0
+        #         # self.move_to_object()
+
+        #     elif(self.area < 50000):
+        #         self.intermediateGoal2Acheived = 1
+        #         print('intermediateGoal2Acheived')
+        #         self.stop()
+
+        #     if(self.area < 50000 and self.intermediateGoal2Acheived):
+
+        #         self.find_ball(cv_image)
+        #         self.move_to_object()
+        #     else:
+        #         self.goal2Acheived = 1
+        #         print('goal 2 acheived')
+        #         self.stop()
+        # elif(self.goal2Acheived):
+        #     print('goal 2 acheived, waiting for next movement')
+
+
+        
         
 
     def show_image(self,img):
@@ -170,7 +259,7 @@ class TakePhoto:
 
         for pic, contour in enumerate(contours):
             area = cv2.contourArea(contour)
-            
+            print('initial area captured = ' + str(area))
             if(area > 30):
                 
                 x, y, w, h = cv2.boundingRect(contour)
@@ -195,8 +284,8 @@ class TakePhoto:
 
     def move_to_object(self):
         
-        if(self.cx==0):
-            text="searching"
+        if(self.cx==0 or self.area > 50000):
+            print("searching")
             self.rot.angular.z=0.1
             self.rot.linear.x=0
 
@@ -235,7 +324,7 @@ class TakePhoto:
 
 
         self.pub.publish(self.rot)
-        print(text)
+        # print(text)
 
     def stop(self):
         self.rot.angular.z=0
@@ -243,16 +332,109 @@ class TakePhoto:
         self.pub.publish(self.rot)
         # print(text)
 
+    
+
+    # manipulator control functions
+
+    def open_gripper(self):
+        print ("Opening Gripper...")
+        self.gripper_group_variable_values[0] = 00.009
+        self.gripper_group.set_joint_value_target(self.gripper_group_variable_values)
+        plan2 = self.gripper_group.go()
+        self.gripper_group.stop()
+        self.gripper_group.clear_pose_targets()
+        rospy.sleep(1)
+
+    def close_gripper(self):
+        print ("Closing Gripper...")
+        self.gripper_group_variable_values[0] = -00.0006
+        self.gripper_group.set_joint_value_target(self.gripper_group_variable_values)
+        plan2 = self.gripper_group.go()
+        self.gripper_group.stop()
+        self.gripper_group.clear_pose_targets()
+        rospy.sleep(1)
+
+    def move_home(self):
+        self.arm_group.set_named_target("home")
+        print ("Executing Move: Home")
+        plan_success, plan1, planning_time, error_code = self.arm_group.plan()
+        self.arm_group.execute(plan1, wait=True)
+        self.arm_group.stop()
+        self.arm_group.clear_pose_targets()
+        variable = self.arm_group.get_current_pose()
+        print (variable.pose)
+        rospy.sleep(1)
+
+    # def move_zero():
+    # 	arm_group.set_named_target("zero")
+    # 	print ("Executing Move: Zero")
+    # 	plan_success, plan1, planning_time, error_code = arm_group.plan()
+    # 	arm_group.execute(plan1, wait=True)
+    # 	arm_group.stop()
+    # 	arm_group.clear_pose_targets()
+    # 	variable = arm_group.get_current_pose()
+    # 	print (variable.pose)
+    # 	rospy.sleep(1)
+
+    def move_position1(self):
+        self.arm_group.set_named_target("position1")
+        print ("Executing Move: Position1")
+        plan_success, plan1, planning_time, error_code = self.arm_group.plan()
+        self.arm_group.execute(plan1, wait=True)
+        self.arm_group.stop()
+        self.arm_group.clear_pose_targets()
+        variable = self.arm_group.get_current_pose()
+        print (variable.pose)
+        rospy.sleep(1)
+
+    def move_position2(self):
+        self.arm_group.set_named_target("position2")
+        print ("Executing Move: Position2")
+        plan_success, plan2, planning_time, error_code = self.arm_group.plan()
+        self.arm_group.execute(plan2, wait=True)
+        self.arm_group.stop()
+        self.arm_group.clear_pose_targets()
+        variable = self.arm_group.get_current_pose()
+        print (variable.pose)
+        rospy.sleep(1)
+
+    def move_position3(self):
+        self.arm_group.set_named_target("position3")
+        print ("Executing Move: Position3")
+        plan_success, plan2, planning_time, error_code = self.arm_group.plan()
+        self.arm_group.execute(plan2, wait=True)
+        self.arm_group.stop()
+        self.arm_group.clear_pose_targets()
+        variable = self.arm_group.get_current_pose()
+        print (variable.pose)
+        rospy.sleep(1)
+
+    def move_position4(self):
+        self.arm_group.set_named_target("position4")
+        print ("Executing Move: Position4")
+        plan_success, plan2, planning_time, error_code = self.arm_group.plan()
+        self.arm_group.execute(plan2, wait=True)
+        self.arm_group.stop()
+        self.arm_group.clear_pose_targets()
+        variable = self.arm_group.get_current_pose()
+        print (variable.pose)
+        rospy.sleep(1)
+
 
 if __name__ == '__main__':
 
     # Initialize
+    moveit_commander.roscpp_initialize(sys.argv)
     rospy.init_node('take_photo', anonymous=False)
+
+    
+    
     camera = TakePhoto()
 
     while not rospy.is_shutdown():
         rospy.sleep(0.1)
         rospy.spin()
+        moveit_commander.roscpp_shutdown()
 
     camera.stop
 
