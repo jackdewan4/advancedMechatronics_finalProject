@@ -9,14 +9,25 @@ from std_msgs.msg import String
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import Twist
-
+# imports for manipulator control
 import moveit_commander
 import moveit_msgs.msg
+# imports for initializing navigation position
+from geometry_msgs.msg import PoseWithCovarianceStamped
+from nav_msgs.msg import Odometry
+# imports for navigation control
+import actionlib
+from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
+
+#import subprocess
+import subprocess
 
 
 class TakePhoto:
     def __init__(self):
-
+        
+        
+        # self.process = subprocess.Popen(["roslaunch", "turtlebot3_manipulation_navigation", "navigation.launch map_file:=$HOME/mapFinalProj.yaml"])
         self.pub=rospy.Publisher('/cmd_vel',Twist,queue_size=10)
         self.rate=rospy.Rate(1)
         self.rot=Twist()
@@ -37,24 +48,35 @@ class TakePhoto:
         # initialize global state flags
         self.goalAcheived = 0
         self.goal2Acheived = 0
+        self.goal3Acheived = 0
         self.intermediateGoal2Acheived = 0
         self.oldWidth = 0
 
         self.area = 0
         self.trajectory1Complete = 0
+        self.trajectory2Complete = 0
 
+        # counter for how far to travel
+
+        self.count = 0
         # manipulator variables
 
+
         self.names1 = 'position1'
-        self.values1 = [-0.002,0.326,0.202,0.088]
+        self.values1 = [-0.155,0.091,0.212,0.280]
         self.names2 = 'position2'
-        self.values2 = [-0.202,0.426,-0.698,0.188]
+        self.values2 = [-0.027,1.009,-0.725,-0.0221]
 
         self.names3 = 'position3'
-        self.values3 = [0.098,0.976,-0.498,0.388]
+        self.values3 = [-0.031,0.590,-0.227,-0.650]
 
         self.names4 = 'position4'
-        self.values4 = [1.198,1.176,-0.648,0.488]
+        self.values4 = [-0.058,-0.536,0.985,-1.064]
+
+        self.names5 = 'position5'
+        self.values5 = [-0.038,0.147,0.474,-0.012]
+
+
 
         self.robot = moveit_commander.RobotCommander()
         self.scene = moveit_commander.PlanningSceneInterface()
@@ -71,12 +93,36 @@ class TakePhoto:
         self.arm_group.remember_joint_values(self.names2, self.values2)
         self.arm_group.remember_joint_values(self.names3, self.values3)
         self.arm_group.remember_joint_values(self.names4, self.values4)
+        self.arm_group.remember_joint_values(self.names5, self.values5)
 
         self.gripper_group_variable_values = self.gripper_group.get_current_joint_values()
-                        
+        
+        # initializing navigation set up 
+        self.initPosePublisher = rospy.Publisher('/odom', PoseWithCovarianceStamped, queue_size = 1)
+        # Construct message
+        self.init_msg = PoseWithCovarianceStamped()
+        self.init_msg.header.frame_id = "map"
+
+        self.init_msg.pose.pose.position.x = 0
+        self.init_msg.pose.pose.position.y = 0
+        self.init_msg.pose.pose.orientation.x = 0
+        self.init_msg.pose.pose.orientation.y = 0
+        self.init_msg.pose.pose.orientation.z = 0
+        self.init_msg.pose.pose.orientation.w = 1
+
+
+        # navigation goal pose set up 
+
 
         # Allow up to one second to connection
         rospy.sleep(1)
+
+        # # Publish message to initialize navigation
+        rospy.loginfo("setting initial pose")
+        self.initPosePublisher.publish(self.init_msg)
+        rospy.loginfo("initial pose is set")
+
+        
 
     def callback(self, data):
 
@@ -88,21 +134,7 @@ class TakePhoto:
 
         self.image_received = True
         self.image = cv_image
-        #self.show_image(cv_image)
         
-        # if (not self.ball_is_taken):
-        # 	self.find_ball(cv_image)
-        # else:
-        # 	self.find_goal(cv_image)
-        
-        # if(self.goalAcheived):
-        #     print('goal acheived')
-        #     return
-        
-        # self.move_to_object()
-
-        # if(self.goalAcheived):
-        #     self.stop()
         if(not self.goalAcheived):
 
             if(self.area < 50000):
@@ -110,68 +142,84 @@ class TakePhoto:
                 self.find_ball(cv_image)
                 self.move_to_object()
             else:
+                
+                
                 self.goalAcheived = 1
                 print('goal acheived')
                 self.stop()
+                
         elif(self.goalAcheived and not self.trajectory1Complete):
-            print('goal sustained and not moving again')
-            self.stop()
-            self.move_home()
-            self.open_gripper()
-            # self.move_position1()
-            # self.move_home()
-            # self.move_position2()
-            # self.move_position3()
-            # self.close_gripper()
-            # self.move_position2()
-            # self.move_position4()
-            # self.open_gripper()
-            # self.move_home()
-            # self.close_gripper()
-            self.trajectory1Complete = 1
+            
+            if(self.count < 14):
+                    self.count += 1
+                    self.rot.linear.x=0.2
+                    self.pub.publish(self.rot)
+            else:
+
+                self.rot.linear.x=0
+                self.pub.publish(self.rot)
+            
+                print('goal sustained and not moving again')
+                self.stop()
+
+                # when the robot stops, the sim has some error an the mobile base continues to rotate slightly as it settles,
+                # therefore a delay must be added before we begin to execute the trajectory in order to make sure the joint angles can be as precise as possible
+                # begin trajectory 1 to pick up first flower
+                self.move_home()
+                self.open_gripper()
+                self.move_position1()
+                self.move_position2()
+                self.move_position3()
+                self.move_position4()
+
+                self.trajectory1Complete = 1
         elif(self.trajectory1Complete and not self.goal2Acheived):
 
-            if (not self.ball_is_taken):
-                if(self.area < 50000):
-
-                    self.find_ball(cv_image)
-            # else:
-                # self.find_goal(cv_image)
-            self.find_ball(cv_image) # add a timer, to rotate for a specified amount of time before trying to find ball
+           # add a timer, to rotate for a specified amount of time before trying to find ball
+            
+            
+            
             # again, then once timer is complete search for ball again, initial attempt of trying to measure size of ball and
             # searching based on being close to current ball does not work.
 
             #  another idea is to navigate to drop off position in next state in order to avoid the ball finding algo, then we can navigate close
             # to the next ball position then find next ball using the algo, continuing with the state machine will work well
-            self.move_to_object()
-            # print('waiting for next movement')
-            print('area = ' + str(self.area))
-        #     if(self.area > 50000):
-        #         self.find_ball(cv_image)    
-        #         self.rot.angular.z=0.1
-        #         self.rot.linear.x=0
-        #         # self.move_to_object()
+            
+            # implementing this navigation implementation now
 
-        #     elif(self.area < 50000):
-        #         self.intermediateGoal2Acheived = 1
-        #         print('intermediateGoal2Acheived')
-        #         self.stop()
+            rospy.loginfo("moving to point 1 \n")
+            self.moveToPose(2.7289962126235006, 2.56646599300953, 0, 0, 0, 0.7072993472328462  , 0.7069141626845439)
+            rospy.loginfo("successfully moved to point 1 \n")
 
-        #     if(self.area < 50000 and self.intermediateGoal2Acheived):
+            rospy.loginfo(navclient.get_result())
+            
+            self.goal2Acheived = 1
+            print('goal 2 acheived')
+        elif(self.goal2Acheived and not self.goal3Acheived):
 
-        #         self.find_ball(cv_image)
-        #         self.move_to_object()
-        #     else:
-        #         self.goal2Acheived = 1
-        #         print('goal 2 acheived')
-        #         self.stop()
-        # elif(self.goal2Acheived):
-        #     print('goal 2 acheived, waiting for next movement')
+            navclient.cancel_goal()
+            navclient.cancel_all_goals()
+            
+            self.goal3Acheived = 1
 
-
+                    
         
-        
+        elif(self.goal3Acheived and not self.trajectory2Complete):
 
+            print('goal 3 sustained and not moving again')
+            self.stop()
+            # # begin trajectory 2 to drop off first flower
+            
+            self.move_position5()
+            self.move_home()
+            self.trajectory2Complete = 1
+            print('trajectory 2 complete')
+
+        elif(self.trajectory2Complete):
+            print('ready to to navigate again')
+            self.stop()
+            
+            
     def show_image(self,img):
         cv2.imshow("Image Window", img)
         cv2.waitKey(3)
@@ -422,6 +470,61 @@ class TakePhoto:
         variable = self.arm_group.get_current_pose()
         print (variable.pose)
         rospy.sleep(1)
+
+    def move_position5(self):
+        self.arm_group.set_named_target("position5")
+        print ("Executing Move: Position5")
+        plan_success, plan2, planning_time, error_code = self.arm_group.plan()
+        self.arm_group.execute(plan2, wait=True)
+        self.arm_group.stop()
+        self.arm_group.clear_pose_targets()
+        variable = self.arm_group.get_current_pose()
+        print (variable.pose)
+        rospy.sleep(1)
+
+    # functions required for navigation to goal poses
+
+    def active_cb(self):
+        rospy.loginfo("Goal pose being processed")
+
+    def feedback_cb(self, feedback):
+        # rospy.loginfo("Current location: "+str(feedback))
+        pass
+
+
+    def done_cb(self, status, result):
+        if status == 3:
+            rospy.loginfo("Goal reached")
+        if status == 2 or status == 8:
+            rospy.loginfo("Goal cancelled")
+        if status == 4:
+            rospy.loginfo("Goal aborted")
+
+
+    def moveToPose(self, x, y, z, qx, qy, qz ,qw):
+        # 7th intermediate pose
+        global navclient
+        global finished
+        navclient = actionlib.SimpleActionClient('move_base',MoveBaseAction)
+        navclient.wait_for_server()
+
+
+        goal = MoveBaseGoal()
+        goal.target_pose.header.frame_id = "map"
+        goal.target_pose.header.stamp = rospy.Time.now()
+
+        goal.target_pose.pose.position.x = x
+        goal.target_pose.pose.position.y = y
+        goal.target_pose.pose.position.z = z
+        goal.target_pose.pose.orientation.x = qx
+        goal.target_pose.pose.orientation.y = qy
+        goal.target_pose.pose.orientation.z = qz
+        goal.target_pose.pose.orientation.w = qw
+
+        navclient.send_goal(goal, self.done_cb, self.active_cb, self.feedback_cb)
+        finished = navclient.wait_for_result(rospy.Duration(30,0))
+
+        navclient.wait_for_server()
 
 
 if __name__ == '__main__':
